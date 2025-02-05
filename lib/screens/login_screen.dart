@@ -23,81 +23,91 @@ class _LoginScreenState extends State<LoginScreen> {
       // appBar: AppBar(
       //   title: Text("Login up Screen"),
       // ),
-      body: Form(
-        key: userForm,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Image.asset("assets/images/reddit.png"),
-            TextFormField(
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              controller: email,
-              decoration: InputDecoration(label: Text("Email")),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return "Email is required";
-                }
-              },
-            ),
-            SizedBox(
-              height: 20,
-            ),
-            TextFormField(
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              controller: password,
-              obscureText: true,
-              enableSuggestions: false,
-              autocorrect: false,
-              decoration: InputDecoration(label: Text("Password")),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return "Password is required";
-                }
-              },
-            ),
-            SizedBox(
-              height: 50,
-            ),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                          minimumSize: Size(0, 50),
-                          foregroundColor: Colors.white,
-                          backgroundColor: Colors.redAccent),
-                      onPressed: () {
-                        LoginController.createAccount(
-                            email: email.text,
-                            password: password.text,
-                            context: context);
+      body: Column(
+        children: [
+          // NOTE: encapsulate with Expanded, Single Child Scroll View, Column to fix the problem when keyboard is up
+          Expanded(
+            child: SingleChildScrollView(
+              child: Form(
+                key: userForm,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Image.asset("assets/images/reddit.png"),
+                    TextFormField(
+                      autovalidateMode: AutovalidateMode.onUserInteraction,
+                      controller: email,
+                      decoration: InputDecoration(label: Text("Email")),
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return "Email is required";
+                        }
                       },
-                      child: Text("Login")),
+                    ),
+                    SizedBox(
+                      height: 20,
+                    ),
+                    TextFormField(
+                      autovalidateMode: AutovalidateMode.onUserInteraction,
+                      controller: password,
+                      obscureText: true,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: InputDecoration(label: Text("Password")),
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return "Password is required";
+                        }
+                      },
+                    ),
+                    SizedBox(
+                      height: 50,
+                    ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                  minimumSize: Size(0, 50),
+                                  foregroundColor: Colors.white,
+                                  backgroundColor: Colors.redAccent),
+                              onPressed: () {
+                                LoginController.createAccount(
+                                    email: email.text,
+                                    password: password.text,
+                                    context: context);
+                              },
+                              child: Text("Login")),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 50),
+                    Row(
+                      children: [
+                        Text("Don't have an account? "),
+                        SizedBox(height: 5),
+                        InkWell(
+                          onTap: () {
+                            Navigator.push(context,
+                                MaterialPageRoute(builder: (context) {
+                              return SignupScreen();
+                            }));
+                          },
+                          child: Text(
+                            "Sign up here",
+                            style: TextStyle(
+                                color: Colors.blue,
+                                fontWeight: FontWeight.bold),
+                          ),
+                        )
+                      ],
+                    )
+                  ],
                 ),
-              ],
+              ),
             ),
-            SizedBox(height: 50),
-            Row(
-              children: [
-                Text("Don't have an account? "),
-                SizedBox(height: 5),
-                InkWell(
-                  onTap: () {
-                    Navigator.push(context,
-                        MaterialPageRoute(builder: (context) {
-                      return SignupScreen();
-                    }));
-                  },
-                  child: Text(
-                    "Sign up here",
-                    style: TextStyle(
-                        color: Colors.blue, fontWeight: FontWeight.bold),
-                  ),
-                )
-              ],
-            )
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

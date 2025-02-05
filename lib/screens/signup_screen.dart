@@ -17,6 +17,8 @@ class _SignupScreenState extends State<SignupScreen> {
 
     TextEditingController email = TextEditingController();
     TextEditingController password = TextEditingController();
+    TextEditingController name = TextEditingController();
+    TextEditingController country = TextEditingController();
 
     print("Account Created Successfully");
 
@@ -59,6 +61,36 @@ class _SignupScreenState extends State<SignupScreen> {
             SizedBox(
               height: 20,
             ),
+            TextFormField(
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              controller: name,
+              enableSuggestions: false,
+              autocorrect: false,
+              decoration: InputDecoration(label: Text("Name")),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return "Name is required";
+                }
+              },
+            ),
+            SizedBox(
+              height: 20,
+            ),
+            TextFormField(
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              controller: country,
+              enableSuggestions: false,
+              autocorrect: false,
+              decoration: InputDecoration(label: Text("Country")),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return "Country is required";
+                }
+              },
+            ),
+            SizedBox(
+              height: 50,
+            ),
             Row(
               children: [
                 Expanded(
@@ -71,6 +103,8 @@ class _SignupScreenState extends State<SignupScreen> {
                         SignupController.createAccount(
                             email: email.text,
                             password: password.text,
+                            name: name.text,
+                            country: country.text,
                             context: context);
                       },
                       child: Text("Create Account")),
