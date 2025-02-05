@@ -13,8 +13,8 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(Duration(seconds: 5), () {
-      openDashBoard();
+    Future.delayed(Duration(seconds: 1), () {
+      openLogin();
     });
   }
 
