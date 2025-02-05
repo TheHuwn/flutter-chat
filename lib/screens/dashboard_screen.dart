@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:globalchat/providers/user_provider.dart';
 import 'package:globalchat/screens/profile_screen.dart';
 import 'package:globalchat/screens/spash_screen.dart';
+import 'package:provider/provider.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -14,6 +16,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   var user = FirebaseAuth.instance.currentUser;
   var db = FirebaseFirestore.instance;
+  var scaffoldKey = GlobalKey<ScaffoldState>();
 
   List<Map<String, dynamic>> chatroomsList = [];
 
@@ -37,9 +40,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    var userProvider = Provider.of<UserProvider>(context);
     return Scaffold(
+        key: scaffoldKey,
         appBar: AppBar(
           title: Text("Global Chat"),
+          leading: InkWell(
+            onTap: () {
+              scaffoldKey.currentState!.openDrawer();
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(6.0),
+              child: CircleAvatar(
+                radius: 20,
+                child: Text(userProvider.userName[0]),
+              ),
+            ),
+          ),
         ),
         drawer: Drawer(
           child: Container(
@@ -47,6 +64,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
               children: [
                 SizedBox(
                   height: 50,
+                ),
+                ListTile(
+                  onTap: () async {
+                    Navigator.push(context,
+                        MaterialPageRoute(builder: (context) {
+                      return ProfileScreen();
+                    }));
+                  },
+                  leading: Icon(Icons.people),
+                  title: Text(userProvider.userName),
+                  subtitle: Text(userProvider.userEmail),
                 ),
                 ListTile(
                   onTap: () async {
@@ -83,6 +111,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // print("ChatROOMNAME is ${chatroomName}");
             return ListTile(
               leading: CircleAvatar(
+                backgroundColor: Colors.blueGrey[900],
                 child: Text(chatroomName.isNotEmpty ? chatroomName[0] : "?"),
               ),
               title: Text(chatroomName),
