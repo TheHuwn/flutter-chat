@@ -20,13 +20,15 @@ class _LoginScreenState extends State<LoginScreen> {
     print("Account Created Successfully");
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text("Login up Screen"),
-      ),
+      // appBar: AppBar(
+      //   title: Text("Login up Screen"),
+      // ),
       body: Form(
         key: userForm,
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            Image.asset("assets/images/reddit.png"),
             TextFormField(
               autovalidateMode: AutovalidateMode.onUserInteraction,
               controller: email,
@@ -54,17 +56,27 @@ class _LoginScreenState extends State<LoginScreen> {
               },
             ),
             SizedBox(
-              height: 20,
+              height: 50,
             ),
-            ElevatedButton(
-                onPressed: () {
-                  LoginController.createAccount(
-                      email: email.text,
-                      password: password.text,
-                      context: context);
-                },
-                child: Text("Login")),
-            SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                          minimumSize: Size(0, 50),
+                          foregroundColor: Colors.white,
+                          backgroundColor: Colors.redAccent),
+                      onPressed: () {
+                        LoginController.createAccount(
+                            email: email.text,
+                            password: password.text,
+                            context: context);
+                      },
+                      child: Text("Login")),
+                ),
+              ],
+            ),
+            SizedBox(height: 50),
             Row(
               children: [
                 Text("Don't have an account? "),

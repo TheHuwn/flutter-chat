@@ -22,12 +22,14 @@ class _SignupScreenState extends State<SignupScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text("Sign up Screen"),
+        title: Text(
+            ""), // Keep this for back button, else can still swipe with no arrow
       ),
       body: Form(
         key: userForm,
         child: Column(
           children: [
+            Image.asset("assets/images/reddit.png"),
             TextFormField(
               autovalidateMode: AutovalidateMode.onUserInteraction,
               controller: email,
@@ -57,14 +59,24 @@ class _SignupScreenState extends State<SignupScreen> {
             SizedBox(
               height: 20,
             ),
-            ElevatedButton(
-                onPressed: () {
-                  SignupController.createAccount(
-                      email: email.text,
-                      password: password.text,
-                      context: context);
-                },
-                child: Text("Create Account"))
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                          minimumSize: Size(0, 50),
+                          foregroundColor: Colors.white,
+                          backgroundColor: Colors.redAccent),
+                      onPressed: () {
+                        SignupController.createAccount(
+                            email: email.text,
+                            password: password.text,
+                            context: context);
+                      },
+                      child: Text("Create Account")),
+                ),
+              ],
+            ),
           ],
         ),
       ),
