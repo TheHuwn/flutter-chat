@@ -71,11 +71,12 @@ class _LoginScreenState extends State<LoginScreen> {
                                   minimumSize: Size(0, 50),
                                   foregroundColor: Colors.white,
                                   backgroundColor: Colors.redAccent),
-                              onPressed: () {
-                                LoginController.createAccount(
+                              onPressed: () async {
+                                await LoginController.createAccount(
                                     email: email.text,
                                     password: password.text,
                                     context: context);
+                                setState(() {});
                               },
                               child: Text("Login")),
                         ),

@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:globalchat/screens/dashboard_screen.dart';
+import 'package:globalchat/screens/spash_screen.dart';
 
 class SignupController {
   static Future<void> createAccount({
@@ -33,7 +34,7 @@ class SignupController {
       }
 
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) {
-        return DashboardScreen();
+        return SplashScreen();
       }));
     } catch (e) {
       SnackBar messageSnackBar =
