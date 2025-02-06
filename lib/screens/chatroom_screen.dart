@@ -41,26 +41,51 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       body: Column(
         children: [
           Expanded(
-            child: Container(
-              color: Colors.white,
-            ),
+            child: StreamBuilder(
+                stream: db
+                    .collection("messages")
+                    .orderBy("timestamp", descending: true)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  var allMessages = snapshot.data?.docs ?? [];
+                  return ListView.builder(
+                      reverse: true,
+                      itemCount: allMessages.length,
+                      itemBuilder: (BuildContext context, int index) {
+                        return Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                allMessages[index]["sender_name"],
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              Text(allMessages[index]["text"]),
+                            ],
+                          ),
+                        );
+                      });
+                }),
           ),
           Container(
             color: Colors.grey[200],
-            child: Row(
-              children: [
-                Expanded(
-                    child: Padding(
-                  padding: const EdgeInsets.all(6.0),
-                  child: TextField(
-                    controller: messageText,
-                    decoration: InputDecoration(
-                        border: InputBorder.none,
-                        hintText: "Enter Message Here ... "),
-                  ),
-                )),
-                InkWell(onTap: sendMessage, child: Icon(Icons.send))
-              ],
+            child: Expanded(
+              child: Row(
+                children: [
+                  Expanded(
+                      child: Padding(
+                    padding: const EdgeInsets.all(6.0),
+                    child: TextField(
+                      controller: messageText,
+                      decoration: InputDecoration(
+                          border: InputBorder.none,
+                          hintText: "Enter Message Here ... "),
+                    ),
+                  )),
+                  InkWell(onTap: sendMessage, child: Icon(Icons.send))
+                ],
+              ),
             ),
           )
         ],
