@@ -25,13 +25,53 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     Map<String, dynamic> messageToSend = {
       "text": messageText.text,
       "sender_name": Provider.of<UserProvider>(context, listen: false).userName,
+      "sender_id": Provider.of<UserProvider>(context, listen: false).userID,
       "chatroom_id": widget.chatroomId,
       "timestamp": FieldValue.serverTimestamp()
     };
+    messageText.text = " ";
     try {
       await db.collection("messages").add(messageToSend);
-      messageText.text = " ";
     } catch (e) {}
+  }
+
+  Widget singleChatItem(
+      {required String senderName,
+      required String senderText,
+      required String senderID}) {
+    return Column(
+      crossAxisAlignment:
+          senderID == Provider.of<UserProvider>(context, listen: false).userID
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 6.0, right: 6),
+          child:
+              Text(senderName, style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+        Container(
+            decoration: BoxDecoration(
+                color: senderID ==
+                        Provider.of<UserProvider>(context, listen: false).userID
+                    ? Colors.grey[300]
+                    : Colors.blueGrey[900],
+                borderRadius: BorderRadius.circular(20)),
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Text(senderText,
+                  style: TextStyle(
+                      color: senderID ==
+                              Provider.of<UserProvider>(context, listen: false)
+                                  .userID
+                          ? Colors.black
+                          : Colors.white)),
+            )),
+        SizedBox(
+          height: 8,
+        )
+      ],
+    );
   }
 
   @override
@@ -52,22 +92,19 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                     print(snapshot.error);
                   }
                   var allMessages = snapshot.data?.docs ?? [];
+                  if (allMessages.isEmpty) {
+                    return Center(child: Text("No messages yet"));
+                  }
                   return ListView.builder(
                       reverse: true,
                       itemCount: allMessages.length,
                       itemBuilder: (BuildContext context, int index) {
                         return Padding(
                           padding: const EdgeInsets.all(8.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                allMessages[index]["sender_name"],
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              Text(allMessages[index]["text"]),
-                            ],
-                          ),
+                          child: singleChatItem(
+                              senderName: allMessages[index]["sender_name"],
+                              senderText: allMessages[index]["text"],
+                              senderID: allMessages[index]["sender_id"]),
                         );
                       });
                 }),
