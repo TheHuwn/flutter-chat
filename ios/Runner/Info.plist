@@ -1,7 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+
 <dict>
+
+	<key>NSCameraUsageDescription</key>
+    <string>Ứng dụng cần truy cập camera để chụp ảnh hoặc quay video.</string>
+
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Ứng dụng cần truy cập thư viện ảnh để gửi tin nhắn.</string>
+
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Ứng dụng cần quyền lưu ảnh vào thư viện.</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Ứng dụng cần quyền truy cập micro để quay video.</string>
+
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

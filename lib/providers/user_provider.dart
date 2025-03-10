@@ -6,6 +6,7 @@ class UserProvider extends ChangeNotifier {
   String userName = "Name";
   String userEmail = "Email";
   String userID = "ID";
+  bool isOnline = true; // Mặc định Online khi đăng nhập
 
   var db = FirebaseFirestore.instance;
 
@@ -15,7 +16,20 @@ class UserProvider extends ChangeNotifier {
       userName = dataSnapshot.data()?["name"] ?? "";
       userEmail = dataSnapshot.data()?["email"] ?? "";
       userID = dataSnapshot.data()?["id"] ?? "";
+      isOnline = dataSnapshot.data()?["status"] ==
+          "online"; // Lấy trạng thái từ Firestore
       notifyListeners();
     });
+  }
+
+  void updateStatus(bool status) {
+    var authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null) {
+      db.collection("users").doc(authUser.uid).update({
+        "status": status ? "online" : "offline",
+      });
+      isOnline = status;
+      notifyListeners();
+    }
   }
 }

@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "965172345760",
-    "project_id": "chat-application-9de4f",
-    "storage_bucket": "chat-application-9de4f.firebasestorage.app"
+    "project_number": "785267613787",
+    "project_id": "global-chat-a7d05",
+    "storage_bucket": "global-chat-a7d05.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:965172345760:android:d0c6238d5ad2e021ea02c5",
+        "mobilesdk_app_id": "1:785267613787:android:64da66e8906fdf8c525f7e",
         "android_client_info": {
           "package_name": "com.dummyapp.globalchat"
         }
@@ -15,7 +15,26 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyChAHxfSgikHfUfe8JU0zii5B2eS_1d_PM"
+          "current_key": "AIzaSyDahh_W5WSS5flzg5ZPbXYahWV9WBajJqw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:785267613787:android:69421d3a8db50c8f525f7e",
+        "android_client_info": {
+          "package_name": "com.example.global_chat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDahh_W5WSS5flzg5ZPbXYahWV9WBajJqw"
         }
       ],
       "services": {
