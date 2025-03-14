@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // Thêm import này
 import 'package:globalchat/providers/user_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,6 +12,7 @@ import 'package:cloudinary_flutter/image/cld_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:globalchat/services/cloudinary_service.dart';
 import 'package:globalchat/widgets/videoplayer_widget.dart';
+import 'package:globalchat/screens/dashboard_screen.dart';
 
 class ChatRoomScreen extends StatefulWidget {
   final String chatroomName;
@@ -50,6 +52,528 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   List<QueryDocumentSnapshot> filteredMessages = [];
   bool isSearching = false;
   final ImagePicker _picker = ImagePicker();
+  bool isAdmin = false; // Biến kiểm tra quyền admin
+  User? user = FirebaseAuth.instance.currentUser; // Khai báo biến user
+  List<Map<String, dynamic>> friendsList = [];
+  List<String> selectedFriendIds = [];
+  Map<String, Map<String, dynamic>> reactionIcons = {
+    'heart': {'icon': Icons.favorite, 'color': Colors.redAccent},
+    'haha': {
+      'icon': Icons.sentiment_very_satisfied,
+      'color': Colors.yellow.shade700
+    },
+    'sad': {'icon': Icons.sentiment_dissatisfied, 'color': Colors.blueAccent},
+    'like': {'icon': Icons.thumb_up, 'color': Colors.greenAccent},
+    'dislike': {'icon': Icons.thumb_down, 'color': Colors.orangeAccent},
+  };
+
+  // Thêm ScrollController
+  ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    checkAdminStatus();
+    _fetchFriends();
+    // Cuộn xuống cuối khi khởi tạo
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose(); // Giải phóng ScrollController
+    messageText.dispose();
+    searchController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  Future<void> _fetchFriends() async {
+    if (user == null) return;
+    try {
+      var friendsSnapshot = await db
+          .collection("friends")
+          .where("friendIds", arrayContains: user!.uid)
+          .get();
+      setState(() {
+        friendsList = friendsSnapshot.docs.map((doc) {
+          var data = doc.data();
+          var friendIds = data["friendIds"] as List<dynamic>;
+          var friendNames = data["friendNames"] as List<dynamic>;
+          var friendIndex = friendIds.indexOf(user!.uid) == 0 ? 1 : 0;
+          return {
+            "id": friendIds[friendIndex],
+            "name": friendNames[friendIndex],
+          };
+        }).toList();
+      });
+    } catch (e) {
+      print("Lỗi khi lấy danh sách bạn bè: $e");
+    }
+  }
+
+  Future<void> addMembersToGroup() async {
+    if (selectedFriendIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Vui lòng chọn ít nhất một thành viên")),
+      );
+      return;
+    }
+
+    try {
+      DocumentReference chatroomRef =
+          db.collection("chatrooms").doc(widget.chatroomId);
+      List<String> newMemberNames = selectedFriendIds
+          .map((id) => friendsList
+              .firstWhere((friend) => friend["id"] == id)["name"] as String)
+          .toList();
+
+      await db.runTransaction((transaction) async {
+        DocumentSnapshot snapshot = await transaction.get(chatroomRef);
+        if (!snapshot.exists) {
+          throw Exception("Chatroom không tồn tại");
+        }
+
+        List<String> currentMembers =
+            (snapshot.get("members") as List<dynamic>?)?.cast<String>() ?? [];
+        List<String> currentMemberNames =
+            (snapshot.get("memberNames") as List<dynamic>?)?.cast<String>() ??
+                [];
+
+        List<String> membersToAdd = selectedFriendIds
+            .where((id) => !currentMembers.contains(id))
+            .toList();
+        List<String> namesToAdd = newMemberNames
+            .where((name) => !currentMemberNames.contains(name))
+            .toList();
+
+        if (membersToAdd.isEmpty) {
+          throw Exception("Tất cả bạn bè đã chọn đều đã ở trong nhóm");
+        }
+
+        transaction.update(chatroomRef, {
+          "members": FieldValue.arrayUnion(membersToAdd),
+          "memberNames": FieldValue.arrayUnion(namesToAdd),
+        });
+      });
+
+      setState(() {
+        selectedFriendIds.clear();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Đã thêm thành viên vào nhóm")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Lỗi khi thêm thành viên: $e")),
+      );
+    }
+  }
+
+  void showAddMembersDialog() {
+    setState(() {
+      selectedFriendIds.clear();
+    });
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: Container(
+          padding: EdgeInsets.all(16),
+          width: MediaQuery.of(context).size.width * 0.8,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "Thêm thành viên mới",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 10),
+              SizedBox(
+                height: 300,
+                child: friendsList.isEmpty
+                    ? Center(child: CircularProgressIndicator())
+                    : StreamBuilder(
+                        stream: db
+                            .collection("chatrooms")
+                            .doc(widget.chatroomId)
+                            .snapshots(),
+                        builder: (context,
+                            AsyncSnapshot<DocumentSnapshot> snapshot) {
+                          if (!snapshot.hasData) {
+                            return Center(child: CircularProgressIndicator());
+                          }
+                          var data =
+                              snapshot.data!.data() as Map<String, dynamic>;
+                          List<String> currentMembers =
+                              (data["members"] as List<dynamic>?)
+                                      ?.cast<String>() ??
+                                  [];
+
+                          return StatefulBuilder(
+                            builder: (BuildContext context,
+                                StateSetter setDialogState) {
+                              return ListView.builder(
+                                itemCount: friendsList.length,
+                                itemBuilder: (context, index) {
+                                  var friend = friendsList[index];
+                                  bool isAlreadyMember =
+                                      currentMembers.contains(friend["id"]);
+                                  return CheckboxListTile(
+                                    title: Text(friend["name"]),
+                                    value: selectedFriendIds
+                                        .contains(friend["id"]),
+                                    onChanged: isAlreadyMember
+                                        ? null // Vô hiệu hóa nếu đã là thành viên
+                                        : (bool? value) {
+                                            setDialogState(() {
+                                              if (value == true) {
+                                                selectedFriendIds
+                                                    .add(friend["id"]);
+                                              } else {
+                                                selectedFriendIds
+                                                    .remove(friend["id"]);
+                                              }
+                                            });
+                                          },
+                                    subtitle: isAlreadyMember
+                                        ? Text(
+                                            "Đã có trong nhóm",
+                                            style:
+                                                TextStyle(color: Colors.grey),
+                                          )
+                                        : null,
+                                  );
+                                },
+                              );
+                            },
+                          );
+                        },
+                      ),
+              ),
+              SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text("Hủy"),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      addMembersToGroup();
+                      Navigator.pop(context);
+                    },
+                    child: Text("Thêm", style: TextStyle(color: Colors.blue)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Kiểm tra xem người dùng có phải là admin không
+  Future<void> checkAdminStatus() async {
+    var userProvider = Provider.of<UserProvider>(context, listen: false);
+    var doc = await db.collection("chatrooms").doc(widget.chatroomId).get();
+    if (doc.exists) {
+      List<dynamic> admins = doc.data()?["admins"] ?? [];
+      setState(() {
+        isAdmin = admins.contains(userProvider.userID);
+      });
+    }
+  }
+
+  // Xóa thành viên khỏi nhóm
+  Future<void> kickMember(String memberId) async {
+    try {
+      DocumentSnapshot chatroomDoc =
+          await db.collection("chatrooms").doc(widget.chatroomId).get();
+      List<dynamic> admins = chatroomDoc["admins"] ?? [];
+      String memberName = await _getUserNameFromId(memberId) ?? "Unknown";
+
+      // Không cho phép kick admin
+      if (admins.contains(memberId)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Không thể xóa quản trị viên")),
+        );
+        return;
+      }
+
+      await db.collection("chatrooms").doc(widget.chatroomId).update({
+        "members": FieldValue.arrayRemove([memberId]),
+        "memberNames": FieldValue.arrayRemove([memberName]),
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Đã xóa $memberName khỏi nhóm")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Lỗi khi xóa thành viên: $e")),
+      );
+    }
+  }
+
+  // Trao quyền quản trị
+  Future<void> promoteToAdmin(String memberId) async {
+    try {
+      var userProvider = Provider.of<UserProvider>(context, listen: false);
+      DocumentReference chatroomRef =
+          db.collection("chatrooms").doc(widget.chatroomId);
+
+      // Thực hiện transaction để đảm bảo tính toàn vẹn dữ liệu
+      await db.runTransaction((transaction) async {
+        DocumentSnapshot snapshot = await transaction.get(chatroomRef);
+        if (!snapshot.exists) {
+          throw Exception("Chatroom không tồn tại");
+        }
+
+        List<dynamic> currentAdmins = snapshot.get("admins") ?? [];
+        if (!currentAdmins.contains(userProvider.userID)) {
+          throw Exception("Bạn không có quyền thực hiện hành động này");
+        }
+
+        // Cập nhật danh sách admin
+        List<dynamic> newAdmins = List.from(currentAdmins)
+          ..remove(userProvider.userID) // Xóa admin hiện tại
+          ..add(memberId); // Thêm admin mới
+
+        transaction.update(chatroomRef, {
+          "admins": newAdmins,
+        });
+      });
+
+      // Cập nhật trạng thái ngay lập tức mà không cần reload
+      setState(() {
+        isAdmin = false; // Người dùng hiện tại mất quyền admin
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Đã chuyển giao quyền quản trị")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Lỗi khi trao quyền: $e")),
+      );
+    }
+  }
+
+  // Rời nhóm
+  Future<void> leaveGroup() async {
+    var userProvider = Provider.of<UserProvider>(context, listen: false);
+    try {
+      DocumentReference chatroomRef =
+          db.collection("chatrooms").doc(widget.chatroomId);
+
+      await db.runTransaction((transaction) async {
+        DocumentSnapshot snapshot = await transaction.get(chatroomRef);
+        if (!snapshot.exists) {
+          throw Exception("Chatroom không tồn tại");
+        }
+
+        List<dynamic> admins = snapshot.get("admins") ?? [];
+        List<dynamic> members = snapshot.get("members") ?? [];
+        List<dynamic> memberNames = snapshot.get("memberNames") ?? [];
+
+        // Kiểm tra xem user có trong nhóm không
+        if (!members.contains(userProvider.userID)) {
+          throw Exception("Bạn không phải thành viên của nhóm này");
+        }
+
+        // Nếu là admin duy nhất, tự động trao quyền cho thành viên khác
+        if (admins.length == 1 && admins.contains(userProvider.userID)) {
+          if (members.length <= 1) {
+            throw Exception("Không thể rời nhóm khi chỉ có một thành viên");
+          }
+
+          // Chọn thành viên đầu tiên không phải user hiện tại để làm admin mới
+          String newAdminId =
+              members.firstWhere((id) => id != userProvider.userID);
+
+          // Cập nhật danh sách admin: xóa user hiện tại, thêm admin mới
+          List<dynamic> newAdmins = List.from(admins)
+            ..remove(userProvider.userID)
+            ..add(newAdminId);
+
+          transaction.update(chatroomRef, {
+            "members": FieldValue.arrayRemove([userProvider.userID]),
+            "memberNames": FieldValue.arrayRemove([userProvider.userName]),
+            "admins": newAdmins, // Cập nhật danh sách admin mới
+          });
+        } else {
+          // Trường hợp không phải admin duy nhất hoặc không phải admin
+          transaction.update(chatroomRef, {
+            "members": FieldValue.arrayRemove([userProvider.userID]),
+            "memberNames": FieldValue.arrayRemove([userProvider.userName]),
+            "admins": FieldValue.arrayRemove([userProvider.userID]),
+          });
+        }
+      });
+
+      // Nếu là admin, cập nhật trạng thái
+      if (isAdmin) {
+        setState(() {
+          isAdmin = false;
+        });
+      }
+
+      // Quay về Dashboard
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => DashboardScreen()),
+        (route) => false,
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Đã rời nhóm")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Lỗi khi rời nhóm: $e")),
+      );
+    }
+  }
+
+  // Hiển thị danh sách thành viên
+  void showMembersDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: Container(
+          padding: EdgeInsets.all(16),
+          width: MediaQuery.of(context).size.width * 0.8,
+          child: StreamBuilder(
+            stream:
+                db.collection("chatrooms").doc(widget.chatroomId).snapshots(),
+            builder: (context, AsyncSnapshot<DocumentSnapshot> snapshot) {
+              if (!snapshot.hasData)
+                return Center(child: CircularProgressIndicator());
+              var data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+              List<String> members =
+                  (data["members"] as List<dynamic>?)?.cast<String>() ?? [];
+              List<String> memberNames =
+                  (data["memberNames"] as List<dynamic>?)?.cast<String>() ?? [];
+              List<String> admins =
+                  (data["admins"] as List<dynamic>?)?.cast<String>() ?? [];
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    "Thành viên",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 10),
+                  SizedBox(
+                    height: 300, // Giữ chiều cao cố định
+                    child: Scrollbar(
+                      // Thêm Scrollbar
+                      thumbVisibility:
+                          true, // Hiển thị thanh cuộn ngay cả khi không cuộn
+                      child: ListView.builder(
+                        itemCount: members.length,
+                        itemBuilder: (context, index) {
+                          String memberId = members[index];
+                          String memberName = memberNames[index];
+                          bool isMemberAdmin = admins.contains(memberId);
+                          return ListTile(
+                            title: Text(memberName),
+                            subtitle: Text(
+                                isMemberAdmin ? "Quản trị viên" : "Thành viên"),
+                            trailing: isAdmin && memberId != user!.uid
+                                ? Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: Icon(Icons.person_remove,
+                                            color: Colors.red),
+                                        onPressed: () => kickMember(memberId),
+                                      ),
+                                      if (!isMemberAdmin)
+                                        IconButton(
+                                          icon: Icon(Icons.admin_panel_settings,
+                                              color: Colors.blue),
+                                          onPressed: () {
+                                            promoteToAdmin(memberId);
+                                            Navigator.pop(
+                                                context); // Đóng dialog sau khi trao quyền
+                                          },
+                                        ),
+                                    ],
+                                  )
+                                : null,
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text("Đóng"),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Hiển thị menu cài đặt
+  void showSettingsMenu() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => Container(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.group),
+              title: Text("Xem thành viên"),
+              onTap: () {
+                Navigator.pop(context);
+                showMembersDialog();
+              },
+            ),
+            ListTile(
+              // Loại bỏ điều kiện isAdmin để mọi người đều thêm được
+              leading: Icon(Icons.person_add),
+              title: Text("Thêm thành viên"),
+              onTap: () {
+                Navigator.pop(context);
+                showAddMembersDialog();
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.exit_to_app, color: Colors.red),
+              title: Text("Rời nhóm", style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(context);
+                leaveGroup();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<void> pickAndSendImage() async {
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
@@ -178,25 +702,173 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     );
   }
 
+  // Future<void> sendMessage(String content,
+  //     {bool isImage = false, bool isVideo = false}) async {
+  //   if (content.isEmpty) return;
+
+  //   var userProvider = Provider.of<UserProvider>(context, listen: false);
+  //   // Đảm bảo senderName luôn lấy từ Firestore nếu userProvider.userName rỗng
+  //   String senderName = userProvider.userName.isNotEmpty
+  //       ? userProvider.userName
+  //       : (await _getUserNameFromId(userProvider.userID)) ??
+  //           "Tên không xác định";
+
+  //   Map<String, dynamic> messageToSend = {
+  //     "text": (!isImage && !isVideo) ? content : "",
+  //     "imageUrl": isImage ? content : null,
+  //     "videoUrl": isVideo ? content : null,
+  //     "sender_name": senderName,
+  //     "sender_email": userProvider.userEmail,
+  //     "sender_id": userProvider.userID,
+  //     "chatroom_id": widget.chatroomId,
+  //     "timestamp": FieldValue.serverTimestamp(),
+  //     "isPinned": false,
+  //   };
+
+  //   await db.collection("messages").add(messageToSend);
+  //   messageText.clear();
+  // }
   Future<void> sendMessage(String content,
       {bool isImage = false, bool isVideo = false}) async {
     if (content.isEmpty) return;
 
     var userProvider = Provider.of<UserProvider>(context, listen: false);
+    String senderName = userProvider.userName.isNotEmpty
+        ? userProvider.userName
+        : (await _getUserNameFromId(userProvider.userID)) ??
+            "Tên không xác định";
+
     Map<String, dynamic> messageToSend = {
       "text": (!isImage && !isVideo) ? content : "",
       "imageUrl": isImage ? content : null,
       "videoUrl": isVideo ? content : null,
-      "sender_name": userProvider.userName,
+      "sender_name": senderName,
       "sender_email": userProvider.userEmail,
       "sender_id": userProvider.userID,
       "chatroom_id": widget.chatroomId,
       "timestamp": FieldValue.serverTimestamp(),
-      "isPinned": false, // Thêm trạng thái ghim
+      "isPinned": false,
+      "reactions": {
+        "heart": [],
+        "haha": [],
+        "sad": [],
+        "like": [],
+        "dislike": [],
+      },
     };
 
     await db.collection("messages").add(messageToSend);
     messageText.clear();
+    // Cuộn xuống tin nhắn vừa gửi
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottom();
+    });
+  }
+
+  void showReactionMenu(BuildContext context, String messageId) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.3),
+      builder: (context) => Center(
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.8,
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? Colors.grey.shade900
+                : Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: reactionIcons.entries.map((entry) {
+              return GestureDetector(
+                onTap: () {
+                  toggleReaction(messageId, entry.key);
+                  Navigator.pop(context);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: (entry.value['color'] as Color).withOpacity(0.1),
+                  ),
+                  child: Icon(
+                    entry.value['icon'],
+                    size: 32,
+                    color: entry.value['color'],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> toggleReaction(String messageId, String reactionType) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Bạn cần đăng nhập để thả reaction")),
+      );
+      return;
+    }
+
+    print("User ID hiện tại: ${currentUser.uid}");
+    print("Message ID: $messageId");
+    print("Reaction type: $reactionType");
+
+    try {
+      DocumentReference messageRef = db.collection("messages").doc(messageId);
+      DocumentSnapshot snapshot = await messageRef.get();
+      if (!snapshot.exists) {
+        throw Exception("Tin nhắn không tồn tại");
+      }
+
+      Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+      print("Dữ liệu tin nhắn hiện tại: $data");
+
+      Map<String, dynamic> reactions =
+          Map<String, dynamic>.from(data["reactions"] ?? {});
+      for (var key in reactionIcons.keys) {
+        reactions[key] ??= [];
+      }
+
+      List<dynamic> currentReactions =
+          List<dynamic>.from(reactions[reactionType] ?? []);
+      if (currentReactions.contains(currentUser.uid)) {
+        currentReactions.remove(currentUser.uid);
+        print("Xóa reaction $reactionType của ${currentUser.uid}");
+      } else {
+        currentReactions.add(currentUser.uid);
+        print("Thêm reaction $reactionType cho ${currentUser.uid}");
+        reactions.forEach((key, value) {
+          if (key != reactionType) {
+            (value as List).remove(currentUser.uid);
+          }
+        });
+      }
+
+      reactions[reactionType] = currentReactions;
+      print("Dữ liệu reactions gửi đi: $reactions");
+      await messageRef.update({"reactions": reactions});
+      print("Reaction được cập nhật thành công");
+    } catch (e) {
+      print("Lỗi khi thêm reaction: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Không thể thêm reaction: $e")),
+      );
+    }
   }
 
   void togglePinMessage(String messageId, bool isCurrentlyPinned) async {
@@ -209,102 +881,6 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     }
   }
 
-  Widget buildChatBubble({
-    required String senderName,
-    required String senderEmail,
-    required String senderText,
-    required String senderID,
-    required bool showAvatar,
-    required bool isCurrentUser,
-    required String messageId, // Thêm ID tin nhắn để xóa
-    String? imageUrl,
-    String? videoUrl,
-  }) {
-    Color avatarColor = getColorFromID(senderID);
-    bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
-    return GestureDetector(
-      onLongPress: isCurrentUser
-          ? () => showDeleteDialog(context,
-              messageId) // Chỉ hiển thị nếu là tin nhắn của user hiện tại
-          : null,
-      child: Column(
-        crossAxisAlignment:
-            isCurrentUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        children: [
-          if (senderName.isNotEmpty)
-            Padding(
-              padding: EdgeInsets.only(left: avatarSize + 8, bottom: 2),
-              child: Text(
-                //lưu ý
-                senderName,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: isDarkMode ? Colors.white70 : Colors.black54,
-                ),
-              ),
-            ),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisAlignment:
-                isCurrentUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-            children: [
-              if (!isCurrentUser && showAvatar)
-                CircleAvatar(
-                  backgroundColor: avatarColor,
-                  radius: avatarSize / 2,
-                  child: Text(
-                    senderEmail[0].toUpperCase(),
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
-                )
-              else if (!isCurrentUser)
-                SizedBox(width: avatarSize),
-              SizedBox(width: 8),
-              Flexible(
-                child: Container(
-                  padding: EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-                  margin: EdgeInsets.symmetric(vertical: 2),
-                  decoration: BoxDecoration(
-                    color: isCurrentUser
-                        ? (isDarkMode ? Colors.blue[700] : Colors.blue[300])
-                        : (isDarkMode ? Colors.grey[800] : Colors.grey[300]),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: imageUrl != null
-                      ? GestureDetector(
-                          onTap: () => showImageDialog(context, imageUrl),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: Image.network(
-                              imageUrl,
-                              width: 100,
-                              height: 100,
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        )
-                      : videoUrl != null
-                          ? GestureDetector(
-                              onTap: () => showVideoDialog(context, videoUrl),
-                              child: Icon(Icons.play_circle_fill, size: 50),
-                            )
-                          : Text(
-                              senderText,
-                              style: TextStyle(
-                                  color:
-                                      isDarkMode ? Colors.white : Colors.black),
-                            ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
   // Widget buildChatBubble({
   //   required String senderName,
   //   required String senderEmail,
@@ -313,7 +889,6 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   //   required bool showAvatar,
   //   required bool isCurrentUser,
   //   required String messageId,
-  //   required bool isPinned, // Thêm trạng thái ghim
   //   String? imageUrl,
   //   String? videoUrl,
   // }) {
@@ -321,246 +896,915 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   //   bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
   //   return GestureDetector(
-  //     onLongPress: () {
-  //       showModalBottomSheet(
-  //         context: context,
-  //         builder: (context) => Wrap(
-  //           children: [
-  //             ListTile(
-  //               leading:
-  //                   Icon(isPinned ? Icons.push_pin : Icons.push_pin_outlined),
-  //               title: Text(isPinned ? "Bỏ ghim" : "Ghim"),
-  //               onTap: () {
-  //                 togglePinMessage(messageId, isPinned);
-  //                 Navigator.pop(context);
-  //               },
-  //             ),
-  //             if (isCurrentUser) // Chỉ hiển thị nút xóa nếu là user gửi tin
-  //               ListTile(
-  //                 leading: Icon(Icons.delete, color: Colors.red),
-  //                 title: Text("Xóa tin nhắn"),
-  //                 onTap: () {
-  //                   deleteMessage(messageId);
-  //                   Navigator.pop(context);
-  //                 },
+  //     onTap: !isCurrentUser ? () => showReactionMenu(context, messageId) : null,
+  //     onLongPress:
+  //         isCurrentUser ? () => showDeleteDialog(context, messageId) : null,
+  //     child: Padding(
+  //       padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 12.0),
+  //       child: Column(
+  //         crossAxisAlignment:
+  //             isCurrentUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+  //         children: [
+  //           if (senderName.isNotEmpty)
+  //             Padding(
+  //               padding: EdgeInsets.only(left: avatarSize + 8, bottom: 4),
+  //               child: Text(
+  //                 senderName,
+  //                 style: TextStyle(
+  //                   fontSize: 12,
+  //                   fontWeight: FontWeight.bold,
+  //                   color: isDarkMode ? Colors.white70 : Colors.grey.shade700,
+  //                 ),
   //               ),
-  //           ],
-  //         ),
-  //       );
-  //     },
-  //     child: Column(
-  //       crossAxisAlignment:
-  //           isCurrentUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-  //       children: [
-  //         if (isPinned) // Hiển thị biểu tượng ghim nếu tin nhắn đã ghim
+  //             ),
   //           Row(
-  //             mainAxisSize: MainAxisSize.min,
+  //             crossAxisAlignment: CrossAxisAlignment.end,
+  //             mainAxisAlignment: isCurrentUser
+  //                 ? MainAxisAlignment.end
+  //                 : MainAxisAlignment.start,
   //             children: [
-  //               Icon(Icons.push_pin, size: 14, color: Colors.orange),
-  //               SizedBox(width: 4),
-  //               Text(
-  //                 "Đã ghim",
-  //                 style: TextStyle(fontSize: 12, color: Colors.orange),
+  //               if (!isCurrentUser && showAvatar)
+  //                 GestureDetector(
+  //                   onTap: () =>
+  //                       showFriendRequestDialog(context, senderID, senderName),
+  //                   child: CircleAvatar(
+  //                     backgroundColor: avatarColor,
+  //                     radius: avatarSize / 2,
+  //                     child: Text(
+  //                       senderEmail[0].toUpperCase(),
+  //                       style: const TextStyle(
+  //                         color: Colors.white,
+  //                         fontWeight: FontWeight.bold,
+  //                         fontSize: 16,
+  //                       ),
+  //                     ),
+  //                   ),
+  //                 )
+  //               else if (!isCurrentUser)
+  //                 SizedBox(width: avatarSize),
+  //               const SizedBox(width: 8),
+  //               Flexible(
+  //                 child: Column(
+  //                   crossAxisAlignment: isCurrentUser
+  //                       ? CrossAxisAlignment.end
+  //                       : CrossAxisAlignment.start,
+  //                   children: [
+  //                     Container(
+  //                       constraints: BoxConstraints(
+  //                         maxWidth: MediaQuery.of(context).size.width * 0.75,
+  //                       ),
+  //                       padding: const EdgeInsets.symmetric(
+  //                           vertical: 10, horizontal: 14),
+  //                       decoration: BoxDecoration(
+  //                         color: isCurrentUser
+  //                             ? (isDarkMode
+  //                                 ? Colors.blue.shade700
+  //                                 : Colors.blue.shade300)
+  //                             : (isDarkMode
+  //                                 ? Colors.grey.shade800
+  //                                 : Colors.grey.shade200),
+  //                         borderRadius: BorderRadius.circular(20),
+  //                         boxShadow: [
+  //                           BoxShadow(
+  //                             color: Colors.black.withOpacity(0.1),
+  //                             blurRadius: 6,
+  //                             offset: const Offset(0, 2),
+  //                           ),
+  //                         ],
+  //                       ),
+  //                       child: imageUrl != null
+  //                           ? GestureDetector(
+  //                               onTap: () => showImageDialog(context, imageUrl),
+  //                               child: ClipRRect(
+  //                                 borderRadius: BorderRadius.circular(10),
+  //                                 child: Image.network(
+  //                                   imageUrl,
+  //                                   width: 100,
+  //                                   height: 100,
+  //                                   fit: BoxFit.cover,
+  //                                 ),
+  //                               ),
+  //                             )
+  //                           : videoUrl != null
+  //                               ? GestureDetector(
+  //                                   onTap: () =>
+  //                                       showVideoDialog(context, videoUrl),
+  //                                   child: const Icon(Icons.play_circle_fill,
+  //                                       size: 50, color: Colors.white),
+  //                                 )
+  //                               : Text(
+  //                                   senderText,
+  //                                   style: TextStyle(
+  //                                     color: isDarkMode
+  //                                         ? Colors.white
+  //                                         : Colors.black87,
+  //                                     fontSize: 16,
+  //                                   ),
+  //                                 ),
+  //                     ),
+  //                     // Hiển thị reactions
+  //                     StreamBuilder<DocumentSnapshot>(
+  //                       stream: db
+  //                           .collection("messages")
+  //                           .doc(messageId)
+  //                           .snapshots(),
+  //                       builder: (context, snapshot) {
+  //                         if (!snapshot.hasData || snapshot.data == null)
+  //                           return const SizedBox.shrink();
+  //                         var data =
+  //                             snapshot.data!.data() as Map<String, dynamic>? ??
+  //                                 {};
+  //                         Map<String, dynamic> reactions =
+  //                             data["reactions"] ?? {};
+
+  //                         if (reactions.isEmpty ||
+  //                             reactions.values
+  //                                 .every((value) => (value as List).isEmpty)) {
+  //                           return const SizedBox.shrink();
+  //                         }
+
+  //                         List<MapEntry<String, dynamic>> nonEmptyReactions =
+  //                             reactions.entries
+  //                                 .where((entry) =>
+  //                                     (entry.value as List).isNotEmpty)
+  //                                 .toList();
+
+  //                         return Padding(
+  //                           padding: const EdgeInsets.only(top: 4),
+  //                           child: GestureDetector(
+  //                             onTap: () =>
+  //                                 _showReactionDetails(context, reactions),
+  //                             child: Wrap(
+  //                               spacing: 6,
+  //                               children: [
+  //                                 // Hiển thị tối đa 2 icon, nếu có hơn 2 thì thêm "..."
+  //                                 ...nonEmptyReactions.take(2).map((entry) =>
+  //                                     Container(
+  //                                       padding: const EdgeInsets.symmetric(
+  //                                           horizontal: 6, vertical: 2),
+  //                                       decoration: BoxDecoration(
+  //                                         color: isDarkMode
+  //                                             ? Colors.grey.shade900
+  //                                             : Colors.grey.shade100,
+  //                                         borderRadius:
+  //                                             BorderRadius.circular(12),
+  //                                       ),
+  //                                       child: Row(
+  //                                         mainAxisSize: MainAxisSize.min,
+  //                                         children: [
+  //                                           Icon(
+  //                                             reactionIcons[entry.key]!['icon'],
+  //                                             size: 14,
+  //                                             color: reactionIcons[entry.key]![
+  //                                                 'color'],
+  //                                           ),
+  //                                           const SizedBox(width: 4),
+  //                                           Text(
+  //                                             '${(entry.value as List).length}',
+  //                                             style: TextStyle(
+  //                                               fontSize: 12,
+  //                                               color: isDarkMode
+  //                                                   ? Colors.white70
+  //                                                   : Colors.grey.shade700,
+  //                                             ),
+  //                                           ),
+  //                                         ],
+  //                                       ),
+  //                                     )),
+  //                                 if (nonEmptyReactions.length > 2)
+  //                                   Container(
+  //                                     padding: const EdgeInsets.symmetric(
+  //                                         horizontal: 6, vertical: 2),
+  //                                     decoration: BoxDecoration(
+  //                                       color: isDarkMode
+  //                                           ? Colors.grey.shade900
+  //                                           : Colors.grey.shade100,
+  //                                       borderRadius: BorderRadius.circular(12),
+  //                                     ),
+  //                                     child: Text(
+  //                                       "...",
+  //                                       style: TextStyle(
+  //                                         fontSize: 12,
+  //                                         color: isDarkMode
+  //                                             ? Colors.white70
+  //                                             : Colors.grey.shade700,
+  //                                       ),
+  //                                     ),
+  //                                   ),
+  //                               ],
+  //                             ),
+  //                           ),
+  //                         );
+  //                       },
+  //                     ),
+  //                   ],
+  //                 ),
   //               ),
   //             ],
   //           ),
-  //
-  //         Row(
-  //           crossAxisAlignment: CrossAxisAlignment.end,
-  //           mainAxisAlignment:
-  //               isCurrentUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+  //         ],
+  //       ),
+  //     ),
+  //   );
+  // }
+  Widget buildChatBubble({
+    required String senderName,
+    required String senderEmail,
+    required String senderText,
+    required String senderID,
+    required bool showAvatar,
+    required bool isCurrentUser,
+    required String messageId,
+    String? imageUrl,
+    String? videoUrl,
+  }) {
+    Color avatarColor = getColorFromID(senderID);
+    bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    return GestureDetector(
+      onTap: !isCurrentUser ? () => showReactionMenu(context, messageId) : null,
+      onLongPress:
+          isCurrentUser ? () => showDeleteDialog(context, messageId) : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 12.0),
+        child: Column(
+          crossAxisAlignment:
+              isCurrentUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            if (senderName.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.only(left: avatarSize + 8, bottom: 4),
+                child: Text(
+                  senderName,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: isDarkMode ? Colors.white70 : Colors.grey.shade700,
+                  ),
+                ),
+              ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisAlignment: isCurrentUser
+                  ? MainAxisAlignment.end
+                  : MainAxisAlignment.start,
+              children: [
+                if (!isCurrentUser && showAvatar)
+                  GestureDetector(
+                    onTap: () =>
+                        showFriendRequestDialog(context, senderID, senderName),
+                    child: CircleAvatar(
+                      backgroundColor: avatarColor,
+                      radius: avatarSize / 2,
+                      child: Text(
+                        senderEmail[0].toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  )
+                else if (!isCurrentUser)
+                  SizedBox(width: avatarSize),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: isCurrentUser
+                        ? CrossAxisAlignment.end
+                        : CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.of(context).size.width * 0.75,
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 10, horizontal: 14),
+                        decoration: BoxDecoration(
+                          color: isCurrentUser
+                              ? (isDarkMode
+                                  ? Colors.blue.shade700
+                                  : Colors.blue.shade300)
+                              : (isDarkMode
+                                  ? Colors.grey.shade800
+                                  : Colors.grey.shade200),
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: imageUrl != null
+                            ? GestureDetector(
+                                onTap: () => showImageDialog(context, imageUrl),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.network(
+                                    imageUrl,
+                                    width: 100,
+                                    height: 100,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              )
+                            : videoUrl != null
+                                ? GestureDetector(
+                                    onTap: () =>
+                                        showVideoDialog(context, videoUrl),
+                                    child: const Icon(Icons.play_circle_fill,
+                                        size: 50, color: Colors.white),
+                                  )
+                                : Text(
+                                    senderText,
+                                    style: TextStyle(
+                                      color: isDarkMode
+                                          ? Colors.white
+                                          : Colors.black87,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                      ),
+                      StreamBuilder<DocumentSnapshot>(
+                        stream: db
+                            .collection("messages")
+                            .doc(messageId)
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData || snapshot.data == null)
+                            return const SizedBox.shrink();
+                          var data =
+                              snapshot.data!.data() as Map<String, dynamic>? ??
+                                  {};
+                          Map<String, dynamic> reactions =
+                              data["reactions"] ?? {};
+
+                          if (reactions.isEmpty ||
+                              reactions.values
+                                  .every((value) => (value as List).isEmpty)) {
+                            return const SizedBox.shrink();
+                          }
+
+                          List<MapEntry<String, dynamic>> nonEmptyReactions =
+                              reactions.entries
+                                  .where((entry) =>
+                                      (entry.value as List).isNotEmpty)
+                                  .toList();
+
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: GestureDetector(
+                              onTap: () => _showReactionDetails(context,
+                                  reactions, messageId), // Truyền messageId
+                              child: Wrap(
+                                spacing: 6,
+                                children: [
+                                  ...nonEmptyReactions.take(2).map((entry) =>
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: isDarkMode
+                                              ? Colors.grey.shade900
+                                              : Colors.grey.shade100,
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              reactionIcons[entry.key]!['icon'],
+                                              size: 14,
+                                              color: reactionIcons[entry.key]![
+                                                  'color'],
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              '${(entry.value as List).length}',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: isDarkMode
+                                                    ? Colors.white70
+                                                    : Colors.grey.shade700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )),
+                                  if (nonEmptyReactions.length > 2)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: isDarkMode
+                                            ? Colors.grey.shade900
+                                            : Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        "...",
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: isDarkMode
+                                              ? Colors.white70
+                                              : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // void _showReactionDetails(
+  //     BuildContext context, Map<String, dynamic> reactions) {
+  //   showDialog(
+  //     context: context,
+  //     builder: (context) => Dialog(
+  //       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+  //       child: Container(
+  //         width: MediaQuery.of(context).size.width * 0.8,
+  //         padding: const EdgeInsets.all(16),
+  //         child: Column(
+  //           mainAxisSize: MainAxisSize.min,
+  //           crossAxisAlignment: CrossAxisAlignment.start,
   //           children: [
-  //             if (!isCurrentUser && showAvatar)
-  //               CircleAvatar(
-  //                 backgroundColor: avatarColor,
-  //                 radius: 20,
-  //                 child: Text(
-  //                   senderEmail[0].toUpperCase(),
-  //                   style: TextStyle(
-  //                       color: Colors.white, fontWeight: FontWeight.bold),
+  //             const Text(
+  //               "Tất cả",
+  //               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+  //             ),
+  //             const SizedBox(height: 10),
+  //             SizedBox(
+  //               height: 200, // Chiều cao cố định cho danh sách
+  //               child: SingleChildScrollView(
+  //                 child: Column(
+  //                   children: reactions.entries
+  //                       .where((entry) => (entry.value as List).isNotEmpty)
+  //                       .map((entry) {
+  //                     List<String> userIds =
+  //                         (entry.value as List).cast<String>();
+  //                     return Column(
+  //                       crossAxisAlignment: CrossAxisAlignment.start,
+  //                       children: userIds
+  //                           .map((userId) => FutureBuilder<DocumentSnapshot>(
+  //                                 future:
+  //                                     db.collection("users").doc(userId).get(),
+  //                                 builder: (context, snapshot) {
+  //                                   if (!snapshot.hasData)
+  //                                     return const SizedBox.shrink();
+  //                                   var userData = snapshot.data!.data()
+  //                                           as Map<String, dynamic>? ??
+  //                                       {};
+  //                                   String userName =
+  //                                       userData["name"] ?? "Unknown";
+
+  //                                   return ListTile(
+  //                                     leading: Icon(
+  //                                       reactionIcons[entry.key]!['icon'],
+  //                                       color:
+  //                                           reactionIcons[entry.key]!['color'],
+  //                                       size: 20,
+  //                                     ),
+  //                                     title: Text(userName),
+  //                                     contentPadding:
+  //                                         const EdgeInsets.symmetric(
+  //                                             vertical: 2),
+  //                                   );
+  //                                 },
+  //                               ))
+  //                           .toList(),
+  //                     );
+  //                   }).toList(),
   //                 ),
-  //               )
-  //             else if (!isCurrentUser)
-  //               SizedBox(width: 40),
-  //             SizedBox(width: 8),
-  //             Flexible(
-  //               child: Container(
-  //                 padding: EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-  //                 margin: EdgeInsets.symmetric(vertical: 2),
-  //                 decoration: BoxDecoration(
-  //                   color: isCurrentUser
-  //                       ? (isDarkMode ? Colors.blue[700] : Colors.blue[300])
-  //                       : (isDarkMode ? Colors.grey[800] : Colors.grey[300]),
-  //                   borderRadius: BorderRadius.circular(20),
-  //                 ),
-  //                 child: imageUrl != null
-  //                     ? GestureDetector(
-  //                         onTap: () => showImageDialog(context, imageUrl),
-  //                         child: ClipRRect(
-  //                           borderRadius: BorderRadius.circular(10),
-  //                           child: Image.network(
-  //                             imageUrl,
-  //                             width: 100,
-  //                             height: 100,
-  //                             fit: BoxFit.cover,
-  //                           ),
-  //                         ),
-  //                       )
-  //                     : videoUrl != null
-  //                         ? GestureDetector(
-  //                             onTap: () => showVideoDialog(context, videoUrl),
-  //                             child: Icon(Icons.play_circle_fill, size: 50),
-  //                           )
-  //                         : Text(
-  //                             senderText,
-  //                             style: TextStyle(
-  //                                 color:
-  //                                     isDarkMode ? Colors.white : Colors.black),
-  //                           ),
+  //               ),
+  //             ),
+  //             const SizedBox(height: 10),
+  //             Align(
+  //               alignment: Alignment.centerRight,
+  //               child: TextButton(
+  //                 onPressed: () => Navigator.pop(context),
+  //                 child:
+  //                     const Text("Đóng", style: TextStyle(color: Colors.blue)),
   //               ),
   //             ),
   //           ],
   //         ),
-  //       ],
+  //       ),
   //     ),
   //   );
   // }
+  void _showReactionDetails(
+      BuildContext context, Map<String, dynamic> reactions, String messageId) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.8,
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Người thả reaction",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 200,
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: reactions.entries
+                        .where((entry) => (entry.value as List).isNotEmpty)
+                        .map((entry) {
+                      List<String> userIds =
+                          (entry.value as List).cast<String>();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: userIds
+                            .map((userId) => FutureBuilder<DocumentSnapshot>(
+                                  future:
+                                      db.collection("users").doc(userId).get(),
+                                  builder: (context, snapshot) {
+                                    if (!snapshot.hasData)
+                                      return const SizedBox.shrink();
+                                    var userData = snapshot.data!.data()
+                                            as Map<String, dynamic>? ??
+                                        {};
+                                    String userName =
+                                        userData["name"] ?? "Unknown";
+
+                                    bool isCurrentUserReaction =
+                                        userId == currentUser.uid;
+
+                                    return ListTile(
+                                      leading: GestureDetector(
+                                        onTap: isCurrentUserReaction
+                                            ? () {
+                                                toggleReaction(
+                                                    messageId,
+                                                    entry
+                                                        .key); // Sử dụng messageId được truyền vào
+                                                Navigator.pop(context);
+                                              }
+                                            : null,
+                                        child: Icon(
+                                          reactionIcons[entry.key]!['icon'],
+                                          color: reactionIcons[entry.key]![
+                                              'color'],
+                                          size: 20,
+                                        ),
+                                      ),
+                                      title: Text(userName),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                              vertical: 2),
+                                    );
+                                  },
+                                ))
+                            .toList(),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child:
+                      const Text("Đóng", style: TextStyle(color: Colors.blue)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Kiểm tra trạng thái bạn bè
+  Future<bool> isFriend(String friendId) async {
+    var userId = Provider.of<UserProvider>(context, listen: false).userID;
+    try {
+      var friendship = await db
+          .collection("friends")
+          .where("friendIds", arrayContains: userId)
+          .get();
+      return friendship.docs
+          .any((doc) => (doc.data()["friendIds"] as List).contains(friendId));
+    } catch (e) {
+      print("Lỗi khi kiểm tra trạng thái bạn bè: $e");
+      return false;
+    }
+  }
+
+// Kiểm tra yêu cầu kết bạn đang chờ
+  Future<bool> hasPendingRequest(String friendId) async {
+    var userId = Provider.of<UserProvider>(context, listen: false).userID;
+    try {
+      var request = await db
+          .collection("friendRequests")
+          .where("senderId", isEqualTo: userId)
+          .where("receiverId", isEqualTo: friendId)
+          .where("status", isEqualTo: "pending")
+          .limit(1)
+          .get();
+      return request.docs.isNotEmpty;
+    } catch (e) {
+      print("Lỗi khi kiểm tra yêu cầu kết bạn: $e");
+      return false;
+    }
+  }
+
+// Hiển thị dialog gửi yêu cầu kết bạn hoặc trạng thái đã kết bạn
+  void showFriendRequestDialog(
+      BuildContext context, String friendId, String friendName) async {
+    var userProvider = Provider.of<UserProvider>(context, listen: false);
+    String currentUserId = userProvider.userID;
+
+    if (friendId == currentUserId) return; // Không kết bạn với chính mình
+
+    // Lấy tên từ Firestore nếu friendName rỗng hoặc null
+    String displayName = friendName.isNotEmpty
+        ? friendName
+        : (await _getUserNameFromId(friendId)) ?? "Tên không xác định";
+
+    try {
+      bool alreadyFriends = await isFriend(friendId);
+      bool pendingRequest = await hasPendingRequest(friendId);
+
+      if (!mounted) return; // Kiểm tra widget còn tồn tại
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text("Kết bạn"),
+          content: Text(
+            alreadyFriends
+                ? "Bạn và $displayName đã là bạn bè."
+                : pendingRequest
+                    ? "Bạn đã gửi yêu cầu kết bạn tới $displayName rồi."
+                    : "Bạn có muốn gửi lời mời kết bạn tới $displayName không?",
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("Đóng"),
+            ),
+            if (!alreadyFriends && !pendingRequest)
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await db.collection("friendRequests").add({
+                      "senderId": currentUserId,
+                      "senderName": userProvider.userName,
+                      "receiverId": friendId,
+                      "status": "pending",
+                      "timestamp": FieldValue.serverTimestamp(),
+                    });
+                    Navigator.pop(context);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content:
+                              Text("Đã gửi lời mời kết bạn tới $displayName"),
+                          duration: Duration(seconds: 2),
+                          backgroundColor: Colors.white,
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    print("Lỗi khi gửi lời mời kết bạn: $e");
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text("Có lỗi xảy ra khi gửi lời mời"),
+                          duration: Duration(seconds: 2),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  }
+                },
+                child:
+                    Text("Gửi yêu cầu", style: TextStyle(color: Colors.blue)),
+              ),
+          ],
+        ),
+      );
+    } catch (e) {
+      print("Lỗi khi hiển thị dialog kết bạn: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Đã xảy ra lỗi: $e"),
+            duration: Duration(seconds: 2),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+// Hàm phụ để lấy tên người dùng từ Firestore dựa trên UID
+  Future<String?> _getUserNameFromId(String userId) async {
+    try {
+      var userDoc = await FirebaseFirestore.instance
+          .collection("users")
+          .doc(userId)
+          .get();
+      if (userDoc.exists) {
+        return userDoc.data()?["name"] as String?;
+      }
+      return null; // Trả về null nếu document không tồn tại
+    } catch (e) {
+      print("Lỗi khi lấy tên người dùng: $e");
+      return null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.chatroomName)),
-      body: Column(
-        children: [
-          // Ô tìm kiếm
-          Padding(
-            padding: EdgeInsets.all(8.0),
-            child: TextField(
-              controller: searchController,
-              onChanged: filterMessages,
-              decoration: InputDecoration(
-                hintText: "Search user or messages...",
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
-          ),
-          // Hiển thị danh sách tin nhắn
-          Expanded(
-            child: StreamBuilder(
-              stream: db
-                  .collection("messages")
-                  .where("chatroom_id", isEqualTo: widget.chatroomId)
-                  .orderBy("isPinned",
-                      descending: true) // Hiển thị tin nhắn ghim lên trước
-                  .orderBy("timestamp", descending: false)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData)
-                  return Center(child: CircularProgressIndicator());
+    return StreamBuilder<DocumentSnapshot>(
+      stream: db.collection("chatrooms").doc(widget.chatroomId).snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
 
-                allMessages = snapshot.data!.docs;
-                if (!isSearching) filteredMessages = List.from(allMessages);
+        var chatroomData = snapshot.data!.data() as Map<String, dynamic>;
+        bool isGroup = chatroomData["isGroup"] ?? false;
 
-                return ListView.builder(
-                  itemCount: filteredMessages.length,
-                  itemBuilder: (context, index) {
-                    var messageData = filteredMessages[index].data()
-                            as Map<String, dynamic>? ??
-                        {};
-
-                    if (messageData.isEmpty) return SizedBox.shrink();
-
-                    String messageId =
-                        filteredMessages[index].id; // Lấy ID tin nhắn
-                    bool isCurrentUser = messageData["sender_id"] ==
-                        Provider.of<UserProvider>(context, listen: false)
-                            .userID;
-
-                    bool showSenderName = !isCurrentUser &&
-                        (index == 0 ||
-                            (filteredMessages[index - 1].data()
-                                        as Map<String, dynamic>? ??
-                                    {})["sender_id"] !=
-                                messageData["sender_id"]);
-
-                    bool showAvatar = index == filteredMessages.length - 1 ||
-                        (filteredMessages[index + 1].data()
-                                    as Map<String, dynamic>? ??
-                                {})["sender_id"] !=
-                            messageData["sender_id"];
-
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      child: buildChatBubble(
-                        senderName: showSenderName
-                            ? messageData["sender_name"] ?? ""
-                            : "",
-                        senderEmail: messageData["sender_email"] ?? "",
-                        senderText: messageData["text"] ?? "",
-                        senderID: messageData["sender_id"] ?? "",
-                        showAvatar: showAvatar,
-                        isCurrentUser: isCurrentUser,
-                        messageId: messageId, // Truyền ID tin nhắn vào
-                        imageUrl: messageData["imageUrl"],
-                        videoUrl: messageData["videoUrl"],
-                        // isPinned: messageData["isPinned"] ??
-                        //     false, // Thêm tham số này
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          // Thanh nhập tin nhắn & nút gửi ảnh/video
-          Container(
-            color: Theme.of(context).brightness == Brightness.dark
-                ? Colors.black
-                : Colors.white,
-            padding: EdgeInsets.all(8),
-            child: Row(
-              children: [
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(widget.chatroomName),
+            actions: [
+              if (isGroup) // Chỉ hiển thị nút setting trong nhóm tự tạo (isGroup == true)
                 IconButton(
-                  icon: Icon(Icons.image),
-                  onPressed: pickAndSendImage, // Chọn ảnh từ thư viện
+                  icon: Icon(Icons.settings),
+                  onPressed: showSettingsMenu,
                 ),
-                IconButton(
-                  icon: Icon(Icons.videocam),
-                  onPressed: pickAndSendVideo, // Chọn video từ thư viện
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: messageText,
-                    decoration: InputDecoration(
-                      hintText: "Nhập tin nhắn...",
-                      filled: true,
-                      fillColor: Theme.of(context).brightness == Brightness.dark
-                          ? Colors.grey[800]
-                          : Colors.grey[200],
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide.none,
-                      ),
+            ],
+          ),
+          body: Column(
+            children: [
+              Padding(
+                padding: EdgeInsets.all(8.0),
+                child: TextField(
+                  controller: searchController,
+                  onChanged: filterMessages,
+                  decoration: InputDecoration(
+                    hintText: "Search user or messages...",
+                    prefixIcon: Icon(Icons.search),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
                     ),
                   ),
                 ),
-                SizedBox(width: 8),
-                IconButton(
-                  icon: Icon(Icons.send,
-                      color: Theme.of(context).brightness == Brightness.dark
-                          ? Colors.blue[300]
-                          : Colors.blue[700]),
-                  onPressed: () => sendMessage(messageText.text),
+              ),
+              Expanded(
+                child: StreamBuilder(
+                  stream: db
+                      .collection("messages")
+                      .where("chatroom_id", isEqualTo: widget.chatroomId)
+                      .orderBy("isPinned", descending: true)
+                      .orderBy("timestamp", descending: false)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData)
+                      return Center(child: CircularProgressIndicator());
+
+                    allMessages = snapshot.data!.docs;
+                    if (!isSearching) filteredMessages = List.from(allMessages);
+
+                    // Cuộn xuống cuối khi danh sách tin nhắn thay đổi
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _scrollToBottom();
+                    });
+
+                    return ListView.builder(
+                      controller:
+                          _scrollController, // Gắn ScrollController vào ListView
+                      itemCount: filteredMessages.length,
+                      itemBuilder: (context, index) {
+                        var messageData = filteredMessages[index].data()
+                                as Map<String, dynamic>? ??
+                            {};
+
+                        if (messageData.isEmpty) return SizedBox.shrink();
+
+                        String messageId = filteredMessages[index].id;
+                        bool isCurrentUser = messageData["sender_id"] ==
+                            Provider.of<UserProvider>(context, listen: false)
+                                .userID;
+
+                        bool showSenderName = !isCurrentUser &&
+                            (index == 0 ||
+                                (filteredMessages[index - 1].data()
+                                            as Map<String, dynamic>? ??
+                                        {})["sender_id"] !=
+                                    messageData["sender_id"]);
+
+                        bool showAvatar =
+                            index == filteredMessages.length - 1 ||
+                                (filteredMessages[index + 1].data()
+                                            as Map<String, dynamic>? ??
+                                        {})["sender_id"] !=
+                                    messageData["sender_id"];
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          child: buildChatBubble(
+                            senderName: showSenderName
+                                ? messageData["sender_name"] ?? ""
+                                : "",
+                            senderEmail: messageData["sender_email"] ?? "",
+                            senderText: messageData["text"] ?? "",
+                            senderID: messageData["sender_id"] ?? "",
+                            showAvatar: showAvatar,
+                            isCurrentUser: isCurrentUser,
+                            messageId: messageId,
+                            imageUrl: messageData["imageUrl"],
+                            videoUrl: messageData["videoUrl"],
+                          ),
+                        );
+                      },
+                    );
+                  },
                 ),
-              ],
-            ),
+              ),
+              Container(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.black
+                    : Colors.white,
+                padding: EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.image),
+                      onPressed: pickAndSendImage,
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.videocam),
+                      onPressed: pickAndSendVideo,
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: messageText,
+                        decoration: InputDecoration(
+                          hintText: "Nhập tin nhắn...",
+                          filled: true,
+                          fillColor:
+                              Theme.of(context).brightness == Brightness.dark
+                                  ? Colors.grey[800]
+                                  : Colors.grey[200],
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(Icons.send,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.blue[300]
+                              : Colors.blue[700]),
+                      onPressed: () => sendMessage(messageText.text),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
