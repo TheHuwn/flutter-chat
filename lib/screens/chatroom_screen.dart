@@ -13,6 +13,11 @@ import 'package:image_picker/image_picker.dart';
 import 'package:globalchat/services/cloudinary_service.dart';
 import 'package:globalchat/widgets/videoplayer_widget.dart';
 import 'package:globalchat/screens/dashboard_screen.dart';
+import 'package:record/record.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:async';
 
 class ChatRoomScreen extends StatefulWidget {
   final String chatroomName;
@@ -70,11 +75,23 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   // Thêm ScrollController
   ScrollController _scrollController = ScrollController();
 
+  // Thêm biến cho ghi âm và phát âm
+  //final AudioRecorder _recorder = AudioRecorder();
+  AudioRecorder? _recorder; // Đổi thành nullable
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isRecording = false;
+  String? _audioPath; // Đường dẫn file âm thanh tạm thời
+
+  // Thêm biến mới cho tín hiệu âm thanh
+  double _currentAmplitude = 0.0; // Biên độ hiện tại
+  StreamSubscription? _amplitudeSubscription; // Theo dõi biên độ
+
   @override
   void initState() {
     super.initState();
     checkAdminStatus();
     _fetchFriends();
+    _recorder = AudioRecorder(); // Khởi tạo ban đầu
     // Cuộn xuống cuối khi khởi tạo
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToBottom();
@@ -83,10 +100,97 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
 
   @override
   void dispose() {
+    _amplitudeSubscription?.cancel();
+    _recorder?.dispose();
+    _audioPlayer.dispose();
     _scrollController.dispose(); // Giải phóng ScrollController
     messageText.dispose();
     searchController.dispose();
     super.dispose();
+  }
+
+  Future<bool> _requestMicrophonePermission() async {
+    var status = await Permission.microphone.request();
+    return status.isGranted;
+  }
+
+  Future<void> _startRecording() async {
+    if (await _requestMicrophonePermission()) {
+      // Tạo mới AudioRecorder mỗi lần ghi âm
+      _recorder?.dispose(); // Giải phóng instance cũ nếu có
+      _recorder = AudioRecorder(); // Tạo instance mới
+
+      final directory = await getTemporaryDirectory();
+      _audioPath =
+          '${directory.path}/voice_message_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      await _recorder!.start(const RecordConfig(), path: _audioPath!);
+
+      // Lắng nghe biên độ âm thanh
+      _amplitudeSubscription = _recorder!
+          .onAmplitudeChanged(Duration(milliseconds: 100))
+          .listen((amplitude) {
+        setState(() {
+          _currentAmplitude = amplitude.current; // Cập nhật biên độ
+        });
+      });
+
+      setState(() {
+        _isRecording = true;
+      });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Cần cấp quyền microphone để ghi âm")),
+      );
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    if (_isRecording) {
+      await _recorder!.stop();
+      _amplitudeSubscription?.cancel();
+      setState(() {
+        _isRecording = false;
+        _currentAmplitude = 0.0;
+      });
+      if (_audioPath != null) {
+        await _uploadAndSendVoiceMessage();
+      }
+    }
+  }
+
+  Future<void> _uploadAndSendVoiceMessage() async {
+    if (_audioPath == null) {
+      print("Lỗi: _audioPath là null");
+      return;
+    }
+
+    try {
+      print("Bắt đầu tải file âm thanh: $_audioPath");
+      File audioFile = File(_audioPath!);
+      String? audioUrl =
+          await CloudinaryService.uploadFile(audioFile, isAudio: true);
+
+      if (audioUrl != null) {
+        print("Tải lên thành công, URL: $audioUrl");
+        await sendMessage(audioUrl, isAudio: true);
+      } else {
+        print("Tải lên thất bại: audioUrl là null");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Không thể tải lên tin nhắn thoại")),
+        );
+      }
+
+      // Xóa file tạm sau khi tải lên
+      print("Xóa file tạm: $_audioPath");
+      await audioFile.delete();
+      _audioPath = null;
+    } catch (e) {
+      print("Lỗi trong _uploadAndSendVoiceMessage: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Lỗi khi tải lên tin nhắn thoại: $e")),
+      );
+    }
   }
 
   void _scrollToBottom() {
@@ -728,8 +832,46 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   //   await db.collection("messages").add(messageToSend);
   //   messageText.clear();
   // }
+  // Future<void> sendMessage(String content,
+  //     {bool isImage = false, bool isVideo = false}) async {
+  //   if (content.isEmpty) return;
+
+  //   var userProvider = Provider.of<UserProvider>(context, listen: false);
+  //   String senderName = userProvider.userName.isNotEmpty
+  //       ? userProvider.userName
+  //       : (await _getUserNameFromId(userProvider.userID)) ??
+  //           "Tên không xác định";
+
+  //   Map<String, dynamic> messageToSend = {
+  //     "text": (!isImage && !isVideo) ? content : "",
+  //     "imageUrl": isImage ? content : null,
+  //     "videoUrl": isVideo ? content : null,
+  //     "sender_name": senderName,
+  //     "sender_email": userProvider.userEmail,
+  //     "sender_id": userProvider.userID,
+  //     "chatroom_id": widget.chatroomId,
+  //     "timestamp": FieldValue.serverTimestamp(),
+  //     "isPinned": false,
+  //     "reactions": {
+  //       "heart": [],
+  //       "haha": [],
+  //       "sad": [],
+  //       "like": [],
+  //       "dislike": [],
+  //     },
+  //   };
+
+  //   await db.collection("messages").add(messageToSend);
+  //   messageText.clear();
+  //   // Cuộn xuống tin nhắn vừa gửi
+  //   WidgetsBinding.instance.addPostFrameCallback((_) {
+  //     _scrollToBottom();
+  //   });
+  // }
   Future<void> sendMessage(String content,
-      {bool isImage = false, bool isVideo = false}) async {
+      {bool isImage = false,
+      bool isVideo = false,
+      bool isAudio = false}) async {
     if (content.isEmpty) return;
 
     var userProvider = Provider.of<UserProvider>(context, listen: false);
@@ -739,9 +881,10 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             "Tên không xác định";
 
     Map<String, dynamic> messageToSend = {
-      "text": (!isImage && !isVideo) ? content : "",
+      "text": (!isImage && !isVideo && !isAudio) ? content : "",
       "imageUrl": isImage ? content : null,
       "videoUrl": isVideo ? content : null,
+      "audioUrl": isAudio ? content : null, // Thêm trường audioUrl
       "sender_name": senderName,
       "sender_email": userProvider.userEmail,
       "sender_id": userProvider.userID,
@@ -759,7 +902,6 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
 
     await db.collection("messages").add(messageToSend);
     messageText.clear();
-    // Cuộn xuống tin nhắn vừa gửi
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToBottom();
     });
@@ -881,232 +1023,6 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     }
   }
 
-  // Widget buildChatBubble({
-  //   required String senderName,
-  //   required String senderEmail,
-  //   required String senderText,
-  //   required String senderID,
-  //   required bool showAvatar,
-  //   required bool isCurrentUser,
-  //   required String messageId,
-  //   String? imageUrl,
-  //   String? videoUrl,
-  // }) {
-  //   Color avatarColor = getColorFromID(senderID);
-  //   bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
-  //   return GestureDetector(
-  //     onTap: !isCurrentUser ? () => showReactionMenu(context, messageId) : null,
-  //     onLongPress:
-  //         isCurrentUser ? () => showDeleteDialog(context, messageId) : null,
-  //     child: Padding(
-  //       padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 12.0),
-  //       child: Column(
-  //         crossAxisAlignment:
-  //             isCurrentUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-  //         children: [
-  //           if (senderName.isNotEmpty)
-  //             Padding(
-  //               padding: EdgeInsets.only(left: avatarSize + 8, bottom: 4),
-  //               child: Text(
-  //                 senderName,
-  //                 style: TextStyle(
-  //                   fontSize: 12,
-  //                   fontWeight: FontWeight.bold,
-  //                   color: isDarkMode ? Colors.white70 : Colors.grey.shade700,
-  //                 ),
-  //               ),
-  //             ),
-  //           Row(
-  //             crossAxisAlignment: CrossAxisAlignment.end,
-  //             mainAxisAlignment: isCurrentUser
-  //                 ? MainAxisAlignment.end
-  //                 : MainAxisAlignment.start,
-  //             children: [
-  //               if (!isCurrentUser && showAvatar)
-  //                 GestureDetector(
-  //                   onTap: () =>
-  //                       showFriendRequestDialog(context, senderID, senderName),
-  //                   child: CircleAvatar(
-  //                     backgroundColor: avatarColor,
-  //                     radius: avatarSize / 2,
-  //                     child: Text(
-  //                       senderEmail[0].toUpperCase(),
-  //                       style: const TextStyle(
-  //                         color: Colors.white,
-  //                         fontWeight: FontWeight.bold,
-  //                         fontSize: 16,
-  //                       ),
-  //                     ),
-  //                   ),
-  //                 )
-  //               else if (!isCurrentUser)
-  //                 SizedBox(width: avatarSize),
-  //               const SizedBox(width: 8),
-  //               Flexible(
-  //                 child: Column(
-  //                   crossAxisAlignment: isCurrentUser
-  //                       ? CrossAxisAlignment.end
-  //                       : CrossAxisAlignment.start,
-  //                   children: [
-  //                     Container(
-  //                       constraints: BoxConstraints(
-  //                         maxWidth: MediaQuery.of(context).size.width * 0.75,
-  //                       ),
-  //                       padding: const EdgeInsets.symmetric(
-  //                           vertical: 10, horizontal: 14),
-  //                       decoration: BoxDecoration(
-  //                         color: isCurrentUser
-  //                             ? (isDarkMode
-  //                                 ? Colors.blue.shade700
-  //                                 : Colors.blue.shade300)
-  //                             : (isDarkMode
-  //                                 ? Colors.grey.shade800
-  //                                 : Colors.grey.shade200),
-  //                         borderRadius: BorderRadius.circular(20),
-  //                         boxShadow: [
-  //                           BoxShadow(
-  //                             color: Colors.black.withOpacity(0.1),
-  //                             blurRadius: 6,
-  //                             offset: const Offset(0, 2),
-  //                           ),
-  //                         ],
-  //                       ),
-  //                       child: imageUrl != null
-  //                           ? GestureDetector(
-  //                               onTap: () => showImageDialog(context, imageUrl),
-  //                               child: ClipRRect(
-  //                                 borderRadius: BorderRadius.circular(10),
-  //                                 child: Image.network(
-  //                                   imageUrl,
-  //                                   width: 100,
-  //                                   height: 100,
-  //                                   fit: BoxFit.cover,
-  //                                 ),
-  //                               ),
-  //                             )
-  //                           : videoUrl != null
-  //                               ? GestureDetector(
-  //                                   onTap: () =>
-  //                                       showVideoDialog(context, videoUrl),
-  //                                   child: const Icon(Icons.play_circle_fill,
-  //                                       size: 50, color: Colors.white),
-  //                                 )
-  //                               : Text(
-  //                                   senderText,
-  //                                   style: TextStyle(
-  //                                     color: isDarkMode
-  //                                         ? Colors.white
-  //                                         : Colors.black87,
-  //                                     fontSize: 16,
-  //                                   ),
-  //                                 ),
-  //                     ),
-  //                     // Hiển thị reactions
-  //                     StreamBuilder<DocumentSnapshot>(
-  //                       stream: db
-  //                           .collection("messages")
-  //                           .doc(messageId)
-  //                           .snapshots(),
-  //                       builder: (context, snapshot) {
-  //                         if (!snapshot.hasData || snapshot.data == null)
-  //                           return const SizedBox.shrink();
-  //                         var data =
-  //                             snapshot.data!.data() as Map<String, dynamic>? ??
-  //                                 {};
-  //                         Map<String, dynamic> reactions =
-  //                             data["reactions"] ?? {};
-
-  //                         if (reactions.isEmpty ||
-  //                             reactions.values
-  //                                 .every((value) => (value as List).isEmpty)) {
-  //                           return const SizedBox.shrink();
-  //                         }
-
-  //                         List<MapEntry<String, dynamic>> nonEmptyReactions =
-  //                             reactions.entries
-  //                                 .where((entry) =>
-  //                                     (entry.value as List).isNotEmpty)
-  //                                 .toList();
-
-  //                         return Padding(
-  //                           padding: const EdgeInsets.only(top: 4),
-  //                           child: GestureDetector(
-  //                             onTap: () =>
-  //                                 _showReactionDetails(context, reactions),
-  //                             child: Wrap(
-  //                               spacing: 6,
-  //                               children: [
-  //                                 // Hiển thị tối đa 2 icon, nếu có hơn 2 thì thêm "..."
-  //                                 ...nonEmptyReactions.take(2).map((entry) =>
-  //                                     Container(
-  //                                       padding: const EdgeInsets.symmetric(
-  //                                           horizontal: 6, vertical: 2),
-  //                                       decoration: BoxDecoration(
-  //                                         color: isDarkMode
-  //                                             ? Colors.grey.shade900
-  //                                             : Colors.grey.shade100,
-  //                                         borderRadius:
-  //                                             BorderRadius.circular(12),
-  //                                       ),
-  //                                       child: Row(
-  //                                         mainAxisSize: MainAxisSize.min,
-  //                                         children: [
-  //                                           Icon(
-  //                                             reactionIcons[entry.key]!['icon'],
-  //                                             size: 14,
-  //                                             color: reactionIcons[entry.key]![
-  //                                                 'color'],
-  //                                           ),
-  //                                           const SizedBox(width: 4),
-  //                                           Text(
-  //                                             '${(entry.value as List).length}',
-  //                                             style: TextStyle(
-  //                                               fontSize: 12,
-  //                                               color: isDarkMode
-  //                                                   ? Colors.white70
-  //                                                   : Colors.grey.shade700,
-  //                                             ),
-  //                                           ),
-  //                                         ],
-  //                                       ),
-  //                                     )),
-  //                                 if (nonEmptyReactions.length > 2)
-  //                                   Container(
-  //                                     padding: const EdgeInsets.symmetric(
-  //                                         horizontal: 6, vertical: 2),
-  //                                     decoration: BoxDecoration(
-  //                                       color: isDarkMode
-  //                                           ? Colors.grey.shade900
-  //                                           : Colors.grey.shade100,
-  //                                       borderRadius: BorderRadius.circular(12),
-  //                                     ),
-  //                                     child: Text(
-  //                                       "...",
-  //                                       style: TextStyle(
-  //                                         fontSize: 12,
-  //                                         color: isDarkMode
-  //                                             ? Colors.white70
-  //                                             : Colors.grey.shade700,
-  //                                       ),
-  //                                     ),
-  //                                   ),
-  //                               ],
-  //                             ),
-  //                           ),
-  //                         );
-  //                       },
-  //                     ),
-  //                   ],
-  //                 ),
-  //               ),
-  //             ],
-  //           ),
-  //         ],
-  //       ),
-  //     ),
-  //   );
-  // }
   Widget buildChatBubble({
     required String senderName,
     required String senderEmail,
@@ -1117,6 +1033,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     required String messageId,
     String? imageUrl,
     String? videoUrl,
+    String? audioUrl, // Thêm tham số audioUrl
   }) {
     Color avatarColor = getColorFromID(senderID);
     bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
@@ -1211,6 +1128,22 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                                   ),
                                 ),
                               )
+                            // : videoUrl != null
+                            //     ? GestureDetector(
+                            //         onTap: () =>
+                            //             showVideoDialog(context, videoUrl),
+                            //         child: const Icon(Icons.play_circle_fill,
+                            //             size: 50, color: Colors.white),
+                            //       )
+                            //     : Text(
+                            //         senderText,
+                            //         style: TextStyle(
+                            //           color: isDarkMode
+                            //               ? Colors.white
+                            //               : Colors.black87,
+                            //           fontSize: 16,
+                            //         ),
+                            //       ),
                             : videoUrl != null
                                 ? GestureDetector(
                                     onTap: () =>
@@ -1218,15 +1151,36 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                                     child: const Icon(Icons.play_circle_fill,
                                         size: 50, color: Colors.white),
                                   )
-                                : Text(
-                                    senderText,
-                                    style: TextStyle(
-                                      color: isDarkMode
-                                          ? Colors.white
-                                          : Colors.black87,
-                                      fontSize: 16,
-                                    ),
-                                  ),
+                                : audioUrl != null
+                                    ? GestureDetector(
+                                        onTap: () => _playAudio(audioUrl),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.play_arrow,
+                                                color: Colors.white),
+                                            SizedBox(width: 8),
+                                            Text(
+                                              "Tin nhắn thoại",
+                                              style: TextStyle(
+                                                color: isDarkMode
+                                                    ? Colors.white
+                                                    : Colors.black87,
+                                                fontSize: 16,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : Text(
+                                        senderText,
+                                        style: TextStyle(
+                                          color: isDarkMode
+                                              ? Colors.white
+                                              : Colors.black87,
+                                          fontSize: 16,
+                                        ),
+                                      ),
                       ),
                       StreamBuilder<DocumentSnapshot>(
                         stream: db
@@ -1332,83 +1286,22 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     );
   }
 
-  // void _showReactionDetails(
-  //     BuildContext context, Map<String, dynamic> reactions) {
-  //   showDialog(
-  //     context: context,
-  //     builder: (context) => Dialog(
-  //       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-  //       child: Container(
-  //         width: MediaQuery.of(context).size.width * 0.8,
-  //         padding: const EdgeInsets.all(16),
-  //         child: Column(
-  //           mainAxisSize: MainAxisSize.min,
-  //           crossAxisAlignment: CrossAxisAlignment.start,
-  //           children: [
-  //             const Text(
-  //               "Tất cả",
-  //               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-  //             ),
-  //             const SizedBox(height: 10),
-  //             SizedBox(
-  //               height: 200, // Chiều cao cố định cho danh sách
-  //               child: SingleChildScrollView(
-  //                 child: Column(
-  //                   children: reactions.entries
-  //                       .where((entry) => (entry.value as List).isNotEmpty)
-  //                       .map((entry) {
-  //                     List<String> userIds =
-  //                         (entry.value as List).cast<String>();
-  //                     return Column(
-  //                       crossAxisAlignment: CrossAxisAlignment.start,
-  //                       children: userIds
-  //                           .map((userId) => FutureBuilder<DocumentSnapshot>(
-  //                                 future:
-  //                                     db.collection("users").doc(userId).get(),
-  //                                 builder: (context, snapshot) {
-  //                                   if (!snapshot.hasData)
-  //                                     return const SizedBox.shrink();
-  //                                   var userData = snapshot.data!.data()
-  //                                           as Map<String, dynamic>? ??
-  //                                       {};
-  //                                   String userName =
-  //                                       userData["name"] ?? "Unknown";
+  Future<void> _playAudio(String audioUrl) async {
+    try {
+      print("Bắt đầu phát âm thanh từ URL: $audioUrl");
+      await _audioPlayer.stop(); // Dừng phát trước nếu đang phát
+      await _audioPlayer.setUrl(audioUrl);
+      print("Đã đặt URL thành công");
+      await _audioPlayer.play();
+      print("Phát âm thanh hoàn tất");
+    } catch (e) {
+      print("Lỗi khi phát tin nhắn thoại: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Lỗi khi phát tin nhắn thoại: $e")),
+      );
+    }
+  }
 
-  //                                   return ListTile(
-  //                                     leading: Icon(
-  //                                       reactionIcons[entry.key]!['icon'],
-  //                                       color:
-  //                                           reactionIcons[entry.key]!['color'],
-  //                                       size: 20,
-  //                                     ),
-  //                                     title: Text(userName),
-  //                                     contentPadding:
-  //                                         const EdgeInsets.symmetric(
-  //                                             vertical: 2),
-  //                                   );
-  //                                 },
-  //                               ))
-  //                           .toList(),
-  //                     );
-  //                   }).toList(),
-  //                 ),
-  //               ),
-  //             ),
-  //             const SizedBox(height: 10),
-  //             Align(
-  //               alignment: Alignment.centerRight,
-  //               child: TextButton(
-  //                 onPressed: () => Navigator.pop(context),
-  //                 child:
-  //                     const Text("Đóng", style: TextStyle(color: Colors.blue)),
-  //               ),
-  //             ),
-  //           ],
-  //         ),
-  //       ),
-  //     ),
-  //   );
-  // }
   void _showReactionDetails(
       BuildContext context, Map<String, dynamic> reactions, String messageId) {
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -1751,6 +1644,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                             messageId: messageId,
                             imageUrl: messageData["imageUrl"],
                             videoUrl: messageData["videoUrl"],
+                            audioUrl: messageData["audioUrl"], // Thêm audioUrl
                           ),
                         );
                       },
@@ -1758,45 +1652,146 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                   },
                 ),
               ),
+              // Container(
+              //   color: Theme.of(context).brightness == Brightness.dark
+              //       ? Colors.black
+              //       : Colors.white,
+              //   padding: EdgeInsets.all(8),
+              //   child: Row(
+              //     children: [
+              //       IconButton(
+              //         icon: Icon(Icons.image),
+              //         onPressed: pickAndSendImage,
+              //       ),
+              //       IconButton(
+              //         icon: Icon(Icons.videocam),
+              //         onPressed: pickAndSendVideo,
+              //       ),
+              //       IconButton(
+              //         icon: Icon(_isRecording ? Icons.stop : Icons.mic),
+              //         onPressed:
+              //             _isRecording ? _stopRecording : _startRecording,
+              //       ),
+              //       Expanded(
+              //         child: TextField(
+              //           controller: messageText,
+              //           decoration: InputDecoration(
+              //             hintText: "Nhập tin nhắn...",
+              //             filled: true,
+              //             fillColor:
+              //                 Theme.of(context).brightness == Brightness.dark
+              //                     ? Colors.grey[800]
+              //                     : Colors.grey[200],
+              //             border: OutlineInputBorder(
+              //               borderRadius: BorderRadius.circular(20),
+              //               borderSide: BorderSide.none,
+              //             ),
+              //           ),
+              //         ),
+              //       ),
+              //       SizedBox(width: 8),
+              //       IconButton(
+              //         icon: Icon(Icons.send,
+              //             color: Theme.of(context).brightness == Brightness.dark
+              //                 ? Colors.blue[300]
+              //                 : Colors.blue[700]),
+              //         onPressed: () => sendMessage(messageText.text),
+              //       ),
+              //     ],
+              //   ),
+              // ),
               Container(
                 color: Theme.of(context).brightness == Brightness.dark
                     ? Colors.black
                     : Colors.white,
                 padding: EdgeInsets.all(8),
-                child: Row(
+                child: Column(
                   children: [
-                    IconButton(
-                      icon: Icon(Icons.image),
-                      onPressed: pickAndSendImage,
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.videocam),
-                      onPressed: pickAndSendVideo,
-                    ),
-                    Expanded(
-                      child: TextField(
-                        controller: messageText,
-                        decoration: InputDecoration(
-                          hintText: "Nhập tin nhắn...",
-                          filled: true,
-                          fillColor:
-                              Theme.of(context).brightness == Brightness.dark
-                                  ? Colors.grey[800]
-                                  : Colors.grey[200],
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            borderSide: BorderSide.none,
-                          ),
+                    if (_isRecording) // Hiển thị sóng âm thanh khi đang ghi
+                      Container(
+                        height: 30, // Giảm chiều cao từ 50 xuống 30
+                        width: MediaQuery.of(context).size.width *
+                            0.6, // Rộng 60% màn hình
+                        margin: EdgeInsets.only(bottom: 8),
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.grey[800]
+                              : Colors.grey[200],
+                          borderRadius:
+                              BorderRadius.circular(15), // Bo góc mềm hơn
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CustomPaint(
+                              size: Size(50, 20), // Kích thước nhỏ hơn cho sóng
+                              painter: WaveformPainter(_currentAmplitude),
+                            ),
+                            SizedBox(width: 10),
+                            Text(
+                              "Đang ghi...",
+                              style: TextStyle(
+                                color: Theme.of(context).brightness ==
+                                        Brightness.dark
+                                    ? Colors.white70
+                                    : Colors.black54,
+                                fontSize: 12, // Giảm kích thước chữ
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                    SizedBox(width: 8),
-                    IconButton(
-                      icon: Icon(Icons.send,
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? Colors.blue[300]
-                              : Colors.blue[700]),
-                      onPressed: () => sendMessage(messageText.text),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.image),
+                          onPressed: pickAndSendImage,
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.videocam),
+                          onPressed: pickAndSendVideo,
+                        ),
+                        IconButton(
+                          icon: Icon(_isRecording ? Icons.stop : Icons.mic),
+                          onPressed:
+                              _isRecording ? _stopRecording : _startRecording,
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: messageText,
+                            decoration: InputDecoration(
+                              hintText: "Nhập tin nhắn...",
+                              filled: true,
+                              fillColor: Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? Colors.grey[800]
+                                  : Colors.grey[200],
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 8),
+                        IconButton(
+                          icon: Icon(Icons.send,
+                              color: Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? Colors.blue[300]
+                                  : Colors.blue[700]),
+                          onPressed: () => sendMessage(messageText.text),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1806,5 +1801,50 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
         );
       },
     );
+  }
+}
+
+class WaveformPainter extends CustomPainter {
+  final double amplitude;
+
+  WaveformPainter(this.amplitude);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.blueAccent
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.fill;
+
+    final double normalizedAmplitude =
+        (amplitude.abs() / 60).clamp(0.0, 1.0); // Chuẩn hóa biên độ
+    final int barCount = 10; // Số thanh sóng
+    final double barWidth = size.width / (barCount * 2); // Chiều rộng mỗi thanh
+    final double maxHeight = size.height; // Chiều cao tối đa
+
+    for (int i = 0; i < barCount; i++) {
+      // Tính chiều cao thanh dựa trên biên độ, tạo hiệu ứng ngẫu nhiên nhẹ
+      double barHeight =
+          maxHeight * normalizedAmplitude * (0.5 + (i % 2) * 0.5);
+      double x = i * barWidth * 2; // Khoảng cách giữa các thanh
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(
+            x,
+            (size.height - barHeight) / 2, // Căn giữa theo chiều dọc
+            barWidth,
+            barHeight,
+          ),
+          Radius.circular(2), // Bo góc nhẹ cho thanh sóng
+        ),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true; // Luôn vẽ lại khi biên độ thay đổi
   }
 }
